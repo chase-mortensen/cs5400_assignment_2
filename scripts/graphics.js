@@ -320,7 +320,184 @@ MySample.graphics = (function(pixelsX, pixelsY, showPixels) {
     // Renders a Bezier curve based on the input parameters.
     //
     //------------------------------------------------------------------
+    const binomialCache = new Map();
+
+    function binomial(n, k) {
+        const key = `${n}_${k}`;
+        if (binomialCache.has(key)) {
+            return binomialCache.get(key);
+        }
+
+        if (k === 0 || k === n) {
+            binomialCache.set(key, 1);
+            return 1;
+        }
+
+        const coeff = binomial(n - 1, k - 1) + binomial(n - 1, k);
+        binomialCache.set(key, coeff);
+        return coeff;
+    }
+
+    const bezierBlendingCache = new Map();
+
+    function getBezierBlending(degree, segments) {
+        const cacheKey = `${degree}_${segments}`;
+        if (bezierBlendingCache.has(cacheKey)) {
+            return bezierBlendingCache.get(cacheKey);
+        }
+
+        const blending = [];
+
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const oneMinusT = 1 - t;
+
+            const pointBlending = [];
+
+            for (let k = 0; k <= degree; k++) {
+                const coeff = binomial(degree, k);
+                const blend = coeff * Math.pow(t, k) * Math.pow(oneMinusT, degree - k);
+                pointBlending.push(blend);
+            }
+
+            blending.push(pointBlending);
+        }
+
+        bezierBlendingCache.set(cacheKey, blending);
+        return blending;
+    }
+
+    const bezierMatrixCache = new Map();
+
+    function getCubicBezierMatrix() {
+        const key = "cubic";
+        if (bezierMatrixCache.has(key)) {
+            return bezierMatrixCache.get(key);
+        }
+
+        // Cubic Bezier matrix
+        // [ 1  -3   3  -1 ]
+        // [ 0   3  -6   3 ]
+        // [ 0   0   3  -3 ]
+        // [ 0   0   0   1 ]
+        const matrix = {
+            m00: 1,  m01: -3,  m02: 3,   m03: -1,
+            m10: 0,  m11: 3,   m12: -6,  m13: 3,
+            m20: 0,  m21: 0,   m22: 3,   m23: -3,
+            m30: 0,  m31: 0,   m32: 0,   m33: 1
+        };
+
+        bezierMatrixCache.set(key, matrix);
+        return matrix;
+    }
+
+    const powerBasisCache = new Map();
+
+    function getPowerBasis(segments) {
+        const key = segments.toString();
+        if (powerBasisCache.has(key)) {
+            return powerBasisCache.get(key);
+        }
+
+        const basis = [];
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const t2 = t * t;
+            const t3 = t2 * t;
+
+            basis.push({
+                t3: t3,
+                t2: t2,
+                t1: t,
+                t0: 1
+            });
+        }
+
+        powerBasisCache.set(key, basis);
+        return basis;
+    }
+
     function drawCurveBezier(controls, segments, showPoints, showLine, showControl, lineColor) {
+        if (!controls || !Array.isArray(controls)) {
+            console.error("Bezier curve requires an array of control points");
+            return [];
+        }
+
+        if (segments <= 0) {
+            console.warn("Number of segments must be positive");
+            return [];
+        }
+
+        const degree = controls.length - 1;
+        const curvePoints = [];
+
+        if (degree === 3) {
+            const matrix = getCubicBezierMatrix();
+            const powerBasis = getPowerBasis(segments);
+
+            for (let i = 0; i <= segments; i++) {
+                // Optimization - powerBasisCache
+                const { t3, t2, t1, t0 } = powerBasis[i];
+
+                const c0 = t3 * matrix.m00 + t2 * matrix.m10 + t1 * matrix.m20 + t0 * matrix.m30;
+                const c1 = t3 * matrix.m01 + t2 * matrix.m11 + t1 * matrix.m21 + t0 * matrix.m31;
+                const c2 = t3 * matrix.m02 + t2 * matrix.m12 + t1 * matrix.m22 + t0 * matrix.m32;
+                const c3 = t3 * matrix.m03 + t2 * matrix.m13 + t1 * matrix.m23 + t0 * matrix.m33;
+
+                const x = c0 * controls[0].x + c1 * controls[1].x + c2 * controls[2].x + c3 * controls[3].x;
+                const y = c0 * controls[0].y + c1 * controls[1].y + c2 * controls[2].y + c3 * controls[3].y;
+
+                curvePoints.push({x, y});
+            }
+        } else {
+            // Optimization - BezierBlendingCache
+            const blending = getBezierBlending(degree, segments);
+
+            for (let i = 0; i <= segments; i++) {
+                const pointBlending = blending[i];
+                let x = 0;
+                let y = 0;
+
+                for (let k = 0; k <= degree; k++) {
+                    x += pointBlending[k] * controls[k].x;
+                    y += pointBlending[k] * controls[k].y;
+                }
+
+                curvePoints.push({x, y});
+            }
+        }
+
+        if (showLine) {
+            for (let i = 0; i < curvePoints.length - 1; i++) {
+                drawLine(
+                    curvePoints[i].x, curvePoints[i].y,
+                    curvePoints[i+1].x, curvePoints[i+1].y,
+                    lineColor
+                );
+            }
+        }
+
+        if (showPoints) {
+            for (const point of curvePoints) {
+                drawPoint(point.x, point.y, "red");
+            }
+        }
+
+        if (showControl) {
+            for (const point of controls) {
+                drawPoint(point.x, point.y, "blue");
+            }
+
+            for (let i = 0; i < controls.length - 1; i++) {
+                drawLine(
+                    controls[i].x, controls[i].y,
+                    controls[i+1].x, controls[i+1].y,
+                    "green"
+                );
+            }
+        }
+
+        return curvePoints;
     }
 
     //------------------------------------------------------------------
